@@ -14,6 +14,7 @@
 body{font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--paper);color:var(--ink);min-height:100vh;padding-bottom:76px}
 header{background:var(--ink);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;padding-top:calc(14px + env(safe-area-inset-top,0px))}
 header b{font-size:18px;letter-spacing:.2px}
+a{color:var(--in)}
 header button{background:none;border:1px solid #ffffff55;color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
 main{max-width:560px;margin:0 auto;padding:18px}
 h2{font-size:20px;margin-bottom:12px}
@@ -48,7 +49,7 @@ td.x button{background:none;border:0;color:var(--bad);font-size:18px}
 </style>
 </head>
 <body>
-<header><b id="ttl">Attendance</b><button id="lo" hidden>Log out</button></header>
+<header><b id="ttl">Attendance</b><span><button id="ib" hidden>Install</button> <button id="lo" hidden>Log out</button></span></header>
 <main id="app"></main>
 <nav id="nav" hidden>
 <button data-v="punch">Punch</button><button data-v="report">Report</button><button data-v="backup">Backup</button>
@@ -62,6 +63,7 @@ td.x button{background:none;border:0;color:var(--bad);font-size:18px}
 const $=s=>document.querySelector(s),app=$('#app');
 const ls={get(k,d){try{const v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}},set(k,v){localStorage.setItem(k,JSON.stringify(v))}};
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let note='',ip=null;
 let users=ls.get('att_users',{}),recs=ls.get('att_recs',[]),me=sessionStorage.getItem('att_me'),view='punch',mode='login',tick=null;
 const save=()=>{ls.set('att_users',users);ls.set('att_recs',recs)};
 async function hash(s){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
@@ -71,6 +73,13 @@ const fT=d=>new Date(d).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-dig
 const ld=d=>{const x=new Date(d);return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0')};
 const mins=r=>r.out?Math.round((new Date(r.out)-new Date(r.in))/6e4):null;
 const fH=m=>m==null?'-':Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m';
+const fL=l=>l?l.lat.toFixed(5)+', '+l.lng.toFixed(5):'No GPS';
+const lk=l=>l?`<a href="https://www.google.com/maps?q=${l.lat},${l.lng}" target="_blank" rel="noopener">${fL(l)}</a>`:'No GPS';
+function getLoc(){return new Promise(res=>{
+  if(!navigator.geolocation)return res({err:'This device has no GPS support.'});
+  navigator.geolocation.getCurrentPosition(p=>res({lat:+p.coords.latitude.toFixed(6),lng:+p.coords.longitude.toFixed(6),acc:Math.round(p.coords.accuracy)}),
+  e=>res({err:e.code===1?'Location permission is blocked. Allow location for this site in Chrome settings.':e.code===3?'GPS timed out. Go outdoors or turn on Location and try again.':'Location is unavailable. Turn on Location in your phone settings.'}),
+  {enableHighAccuracy:true,timeout:15000,maximumAge:0})})}
 const mine=()=>recs.filter(r=>r.u===me);
 const open=()=>mine().find(r=>!r.out);
 
@@ -114,17 +123,19 @@ function punch(){
   const o=open();
   app.innerHTML=`<div class="clock"><div class="t" id="ck"></div><div class="d" id="dt"></div></div>
   <button class="punch ${o?'out':'in'}" id="pb">${o?'Exit':'Enter'}</button>
-  <div class="status">${o?'Entered at '+fT(o.in)+' on '+fD(o.in):'You are not entered'}</div>
+  <div class="status">${o?'Entered at '+fT(o.in)+' on '+fD(o.in):'You are not entered'}</div>${note?`<div class="msg" style="margin:-8px 0 16px">${esc(note)}</div>`:''}
   <h2>Today</h2><div class="card wrap" id="td"></div>`;
   const clk=()=>{const n=new Date();$('#ck').textContent=n.toLocaleTimeString('en-US');$('#dt').textContent=n.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})};
   clk();tick=setInterval(clk,1000);
-  $('#pb').onclick=()=>{
-    const now=new Date().toISOString(),c=open();
-    if(c)c.out=now;else recs.push({id:Date.now(),u:me,in:now,out:null});
+  $('#pb').onclick=async()=>{
+    const b=$('#pb');b.disabled=true;b.textContent='Getting GPS...';
+    const g=await getLoc(),loc=g.err?null:{lat:g.lat,lng:g.lng,acc:g.acc},now=new Date().toISOString(),c=open();
+    if(c){c.out=now;c.outL=loc}else recs.push({id:Date.now(),u:me,in:now,out:null,inL:loc,outL:null});
+    note=g.err?'Saved without location. '+g.err:'Location saved (accurate to about '+g.acc+' m).';
     save();punch();
   };
   const t=mine().filter(r=>ld(r.in)===ld(new Date()));
-  $('#td').innerHTML=t.length?`<table><tr><th>Entry</th><th>Exit</th><th>Hours</th></tr>${t.map(r=>`<tr><td>${fT(r.in)}</td><td>${r.out?fT(r.out):'-'}</td><td>${fH(mins(r))}</td></tr>`).join('')}</table>`:'<div class="empty">No entries yet today. Tap Enter to start.</div>';
+  $('#td').innerHTML=t.length?`<table><tr><th>Entry</th><th>Exit</th><th>Hours</th><th>Entry GPS</th><th>Exit GPS</th></tr>${t.map(r=>`<tr><td>${fT(r.in)}</td><td>${r.out?fT(r.out):'-'}</td><td>${fH(mins(r))}</td><td>${lk(r.inL)}</td><td>${r.out?lk(r.outL):'-'}</td></tr>`).join('')}</table>`:'<div class="empty">No entries yet today. Tap Enter to start.</div>';
 }
 function rows(f,t){return mine().filter(r=>ld(r.in)>=f&&ld(r.in)<=t).sort((a,b)=>new Date(a.in)-new Date(b.in))}
 function report(){
@@ -136,24 +147,25 @@ function report(){
   const draw=()=>{
     const r=get(),tot=r.reduce((s,x)=>s+(mins(x)||0),0);
     $('#rp').innerHTML=`<div style="padding:4px 2px"><b>${esc(users[me].name)}</b><div style="color:var(--mute);font-size:14px;margin-bottom:8px">${fD($('#f').value)} to ${fD($('#t').value)}</div>`+
-    (r.length?`<table><tr><th>Date</th><th>Entry</th><th>Exit</th><th>Hours</th><th></th></tr>${r.map(x=>`<tr><td>${fD(x.in)}</td><td>${fT(x.in)}</td><td>${x.out?fT(x.out):'-'}</td><td>${fH(mins(x))}</td><td class="x" data-h="1"><button data-id="${x.id}" aria-label="Delete entry">×</button></td></tr>`).join('')}<tr class="tot"><td colspan="3">Total</td><td colspan="2">${fH(tot)}</td></tr></table>`:'<div class="empty">No attendance in this range.</div>')+'</div>';
+    (r.length?`<table><tr><th>Date</th><th>Entry</th><th>Exit</th><th>Hours</th><th>Entry GPS</th><th>Exit GPS</th><th></th></tr>${r.map(x=>`<tr><td>${fD(x.in)}</td><td>${fT(x.in)}</td><td>${x.out?fT(x.out):'-'}</td><td>${fH(mins(x))}</td><td>${lk(x.inL)}</td><td>${x.out?lk(x.outL):'-'}</td><td class="x" data-h="1"><button data-id="${x.id}" aria-label="Delete entry">×</button></td></tr>`).join('')}<tr class="tot"><td colspan="3">Total</td><td colspan="4">${fH(tot)}</td></tr></table>`:'<div class="empty">No attendance in this range.</div>')+'</div>';
     $('#rp').querySelectorAll('button[data-id]').forEach(b=>b.onclick=()=>{if(confirm('Delete this entry?')){recs=recs.filter(x=>x.id!=b.dataset.id);save();draw()}});
   };
   draw();$('#f').onchange=$('#t').onchange=draw;
   const nm=()=>`attendance-${me}-${$('#f').value}-to-${$('#t').value}`;
-  const data=()=>get().map(x=>[fD(x.in),fT(x.in),x.out?fT(x.out):'-',fH(mins(x))]);
+  const data=()=>get().map(x=>[fD(x.in),fT(x.in),x.out?fT(x.out):'-',fH(mins(x)),fL(x.inL),x.out?fL(x.outL):'-']);
   const need=()=>{if(!get().length){$('#mg').innerHTML='<div class="err">No attendance in this range to export.</div>';return false}$('#mg').innerHTML='';return true};
   $('#xp').onclick=()=>{if(!need())return;
     const d=new jspdf.jsPDF();d.setFontSize(15);d.text('Attendance report - '+users[me].name,14,16);d.setFontSize(10);d.text(fD($('#f').value)+' to '+fD($('#t').value),14,23);
     const tot=get().reduce((s,x)=>s+(mins(x)||0),0);
-    d.autoTable({startY:28,head:[['Date','Entry','Exit','Hours']],body:data(),foot:[['Total','','',fH(tot)]],headStyles:{fillColor:[20,35,31]},footStyles:{fillColor:[230,235,231],textColor:20}});
+    d.autoTable({startY:28,styles:{fontSize:8},head:[['Date','Entry','Exit','Hours','Entry GPS','Exit GPS']],body:data(),foot:[['Total','','',fH(tot),'','']],headStyles:{fillColor:[20,35,31]},footStyles:{fillColor:[230,235,231],textColor:20}});
     d.save(nm()+'.pdf')};
   $('#xe').onclick=()=>{if(!need())return;
-    const ws=XLSX.utils.aoa_to_sheet([['Date','Entry','Exit','Hours'],...data()]);ws['!cols']=[{wch:14},{wch:10},{wch:10},{wch:10}];
+    const ws=XLSX.utils.aoa_to_sheet([['Date','Entry','Exit','Hours','Entry GPS','Exit GPS'],...data()]);ws['!cols']=[{wch:14},{wch:10},{wch:10},{wch:10},{wch:22},{wch:22}];
     const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Attendance');XLSX.writeFile(wb,nm()+'.xlsx')};
   $('#xi').onclick=async()=>{if(!need())return;
     const box=$('#rp'),hide=box.querySelectorAll('[data-h]');hide.forEach(e=>e.style.display='none');
-    const c=await html2canvas(box,{backgroundColor:'#fff',scale:2});hide.forEach(e=>e.style.display='');
+    box.style.overflow='visible';box.style.width='max-content';
+    const c=await html2canvas(box,{backgroundColor:'#fff',scale:2});hide.forEach(e=>e.style.display='');box.style.overflow='';box.style.width='';
     c.toBlob(b=>dl(b,nm()+'.png'))};
 }
 function dl(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
@@ -177,7 +189,10 @@ function backup(){
     }catch(x){$('#er').textContent='This is not a valid attendance backup file.'}};
     r.readAsText(f)};
 }
-$('#lo').onclick=()=>{me=null;sessionStorage.removeItem('att_me');mode='login';render()};
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();ip=e;$('#ib').hidden=false});
+$('#ib').onclick=async()=>{if(!ip)return;ip.prompt();await ip.userChoice;ip=null;$('#ib').hidden=true};
+addEventListener('appinstalled',()=>{$('#ib').hidden=true});
+$('#lo').onclick=()=>{me=null;note='';sessionStorage.removeItem('att_me');mode='login';render()};
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{view=b.dataset.v;render()});
 if(me&&!users[me])me=null;
 render();
